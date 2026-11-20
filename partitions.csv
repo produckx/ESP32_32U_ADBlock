@@ -1,0 +1,8 @@
+# Single-app partition table for 4MB flash (maximizing LittleFS storage for large blocklists).
+# Firmware slot: 1.25 MB (0x140000)
+# LittleFS slot: 2.6875 MB (0x2B0000) -> supports up to ~550k domains @ 5 bytes
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x5000
+otadata,    data, ota,     0xe000,   0x2000
+app0,       app,  ota_0,   0x10000,  0x140000
+spiffs,     data, spiffs,  0x150000, 0x2B0000
