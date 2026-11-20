@@ -232,45 +232,65 @@ static bool isBlocked(const char* domain) {
 }
 
 // ---------- persistence ----------
+static String cleanDomain(String d) {
+  d.trim();
+  d.toLowerCase();
+  if (d.startsWith("http://")) d = d.substring(7);
+  else if (d.startsWith("https://")) d = d.substring(8);
+  int slash = d.indexOf('/');
+  if (slash >= 0) d = d.substring(0, slash);
+  int colon = d.indexOf(':');
+  if (colon > 0) d = d.substring(0, colon);
+  if (d.startsWith("www.")) d = d.substring(4);
+  while (d.startsWith(".")) d = d.substring(1);
+  while (d.endsWith(".")) d = d.substring(0, d.length() - 1);
+  d.trim();
+  return d;
+}
+
 static void loadCustom() {
   numCustom = 0; File f = LittleFS.open("/custom.txt", "r"); if (!f) return;
   while (f.available() && numCustom < MAX_CUSTOM) {
-    String l = f.readStringUntil('\n'); l.trim(); l.toLowerCase();
+    String l = f.readStringUntil('\n'); l = cleanDomain(l);
     if (l.length() && l.indexOf('.') > 0) { customDom[numCustom] = l; customHash[numCustom] = fnv40(l.c_str(), l.length()); numCustom++; }
   }
   f.close();
 }
 static void saveCustom() { File f = LittleFS.open("/custom.txt", "w"); if (!f) return; for (int i = 0; i < numCustom; i++) f.println(customDom[i]); f.close(); }
 static bool addCustom(String d) {
-  d.trim(); d.toLowerCase(); if (d.startsWith("www.")) d = d.substring(4);
+  d = cleanDomain(d);
   if (!d.length() || d.indexOf('.') < 0 || numCustom >= MAX_CUSTOM) return false;
   for (int i = 0; i < numCustom; i++) if (customDom[i] == d) return false;
-  customDom[numCustom] = d; customHash[numCustom] = fnv40(d.c_str(), d.length()); numCustom++; saveCustom(); return true;
+  customDom[numCustom] = d; customHash[numCustom] = fnv40(d.c_str(), d.length()); numCustom++;
+  memset(cacheValid, 0, sizeof(cacheValid));
+  saveCustom(); return true;
 }
 static void removeCustom(String d) {
-  d.toLowerCase();
+  d = cleanDomain(d);
   for (int i = 0; i < numCustom; i++) if (customDom[i] == d) {
     for (int j = i; j < numCustom - 1; j++) { customDom[j] = customDom[j+1]; customHash[j] = customHash[j+1]; }
-    numCustom--; saveCustom(); return;
+    numCustom--;
+    memset(cacheValid, 0, sizeof(cacheValid));
+    saveCustom(); return;
   }
 }
 static void loadWhite() {
   numWhite = 0; File f = LittleFS.open("/whitelist.txt", "r"); if (!f) return;
   while (f.available() && numWhite < MAX_WHITE) {
-    String l = f.readStringUntil('\n'); l.trim(); l.toLowerCase();
+    String l = f.readStringUntil('\n'); l = cleanDomain(l);
     if (l.length() && l.indexOf('.') > 0) { whiteDom[numWhite] = l; whiteHash[numWhite] = fnv40(l.c_str(), l.length()); numWhite++; }
   }
   f.close();
 }
 static void saveWhite() { File f = LittleFS.open("/whitelist.txt", "w"); if (!f) return; for (int i = 0; i < numWhite; i++) f.println(whiteDom[i]); f.close(); }
 static bool addWhite(String d) {
-  d.trim(); d.toLowerCase(); if (d.startsWith("www.")) d = d.substring(4);
+  d = cleanDomain(d);
   if (!d.length() || d.indexOf('.') < 0 || numWhite >= MAX_WHITE) return false;
   for (int i = 0; i < numWhite; i++) if (whiteDom[i] == d) return false;
   whiteDom[numWhite] = d; whiteHash[numWhite] = fnv40(d.c_str(), d.length()); numWhite++; saveWhite(); return true;
 }
 static void removeWhite(String d) {
-  d.toLowerCase();
+  d = cleanDomain(d);
   for (int i = 0; i < numWhite; i++) if (whiteDom[i] == d) {
     for (int j = i; j < numWhite - 1; j++) { whiteDom[j] = whiteDom[j+1]; whiteHash[j] = whiteHash[j+1]; }
     numWhite--; saveWhite(); return;
@@ -299,19 +319,39 @@ static void saveBanned() {
 }
 
 // ---------- client table ----------
-static void getMac(uint32_t ip, uint8_t* mac) {
-  memset(mac, 0, 6);
+static bool isZeroMac(const uint8_t* m) {
+  for (int i = 0; i < 6; i++) if (m[i] != 0) return false;
+  return true;
+}
+
+static bool getMac(uint32_t ip, uint8_t* mac) {
   ip4_addr_t ipa; ipa.addr = ip;
   struct eth_addr* eth = nullptr; const ip4_addr_t* ipret = nullptr;
-  for (struct netif* nif = netif_list; nif; nif = nif->next)
-    if (etharp_find_addr(nif, &ipa, &eth, &ipret) >= 0 && eth) { memcpy(mac, eth->addr, 6); return; }
+  for (struct netif* nif = netif_list; nif; nif = nif->next) {
+    if (etharp_find_addr(nif, &ipa, &eth, &ipret) >= 0 && eth) {
+      memcpy(mac, eth->addr, 6);
+      return true;
+    }
+    // If not in ARP cache, proactively send ARP request to discover it
+    etharp_request(nif, &ipa);
+  }
+  return false;
 }
+
 static Dev* getClient(uint32_t ip) {
-  for (int i = 0; i < numClients; i++) if (clients[i].ip == ip) { clients[i].lastSeen = millis(); return &clients[i]; }
+  for (int i = 0; i < numClients; i++) {
+    if (clients[i].ip == ip) {
+      clients[i].lastSeen = millis();
+      if (isZeroMac(clients[i].mac)) getMac(ip, clients[i].mac);
+      return &clients[i];
+    }
+  }
   if (numClients < MAX_CLIENTS) {
     Dev* c = &clients[numClients++];
     c->ip = ip; c->blocked = c->allowed = 0; c->lastSeen = millis(); c->banned = isBannedIP(ip); c->label = "";
-    getMac(ip, c->mac); return c;
+    memset(c->mac, 0, 6);
+    getMac(ip, c->mac);
+    return c;
   }
   return nullptr;
 }
@@ -375,6 +415,7 @@ static void saveNetCfg() {
 static void loadBlockUrl() {
   blockUrl = ""; File f = LittleFS.open("/blockurl.cfg", "r"); if (!f) return;
   blockUrl = f.readStringUntil('\n'); blockUrl.trim(); f.close();
+  if (blockUrl == "0.0.0.0") blockUrl = "";
 }
 static void saveBlockUrl() {
   if (!blockUrl.length() || blockUrl == "0.0.0.0") { LittleFS.remove("/blockurl.cfg"); blockUrl = ""; return; }
@@ -457,10 +498,14 @@ static bool handleDns() {
     Dev* c = getClient((uint32_t)cip);
     bool isLocalDomain = (strcmp(domain, "produckx.local") == 0 || strcmp(domain, "produckx") == 0);
     bool ban = c && c->banned;
-    bool blocked = !isLocalDomain && (ban || (blockingOn && dl && numHashes && isBlocked(domain)));
+    bool blocked = !isLocalDomain && (ban || (blockingOn && dl && isBlocked(domain)));
     int rlen;
     if (isLocalDomain) { rlen = buildLocalAnswer(qend, qtype); }
-    else if (blocked)  { rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; if (dl) logBlocked(domain, (uint32_t)cip); }
+    else if (blocked)  {
+      rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; if (dl) logBlocked(domain, (uint32_t)cip);
+      Serial.printf("[dns] BLOCKED %s (qtype=%u) -> %s\n", domain, qtype,
+                    (blockUrl.length() && blockUrl != "0.0.0.0") ? "redirect-to-ESP32" : "0.0.0.0");
+    }
     else               { rlen = forwardUpstream(qlen, qend);     totalAllowed++; if (c) c->allowed++; }
     if (rlen > 0) { dnsServer.beginPacket(cip, cport); dnsServer.write(buf, rlen); dnsServer.endPacket(); }
   }
@@ -557,6 +602,38 @@ static void handleLoginPost() {
   sendLoginPage("Incorrect username or password");
 }
 
+static String getRequestHost() {
+  String h = web.hostHeader();
+  if (!h.length()) h = web.header("Host");
+  if (h.length()) {
+    int colon = h.indexOf(':'); if (colon > 0) h = h.substring(0, colon);
+    h.trim(); h.toLowerCase();
+  }
+  return h;
+}
+
+static bool isDashboardHost() {
+  String h = getRequestHost();
+  if (!h.length()) return false;
+  if (h == WiFi.localIP().toString() || h == "produckx.local" || h == "produckx") return true;
+  return false;
+}
+
+static bool handleBlockedRedirect() {
+  if (blockUrl.length() > 0 && blockUrl != "0.0.0.0") {
+    String dest = blockUrl;
+    String h = getRequestHost();
+    if (h.length()) {
+      dest += (dest.indexOf('?') >= 0 ? "&domain=" : "?domain=") + h;
+    }
+    web.sendHeader("Location", dest);
+    web.send(302, "text/plain", "Redirecting to " + dest);
+    Serial.printf("[http-sinkhole] redirect %s -> %s\n", h.c_str(), dest.c_str());
+    return true;
+  }
+  return false;
+}
+
 static void handleStats() {
   if (!sessionValid()) { web.send(401, "text/plain", "login required"); return; }
   uint32_t up = millis() / 1000;
@@ -576,8 +653,12 @@ static void handleStats() {
              ",\"resumeIn\":" + (uint32_t)(!blockingOn && resumeAt ? (resumeAt - millis()) / 1000 : 0) +
              ",\"defcreds\":" + ((strcmp(WEB_PASS, "CHANGE_ME_WEB_PASSWORD") == 0 || strcmp(OTA_PASS, "CHANGE_ME_OTA_PASSWORD") == 0) ? "true" : "false") +
              ",\"clients\":[";
-  for (int i = 0; i < numClients; i++) { Dev& c = clients[i]; IPAddress ip(c.ip);
-    j += (i ? "," : ""); j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"banned\":" + (c.banned?"true":"false") + "}"; }
+  for (int i = 0; i < numClients; i++) {
+    Dev& c = clients[i];
+    if (isZeroMac(c.mac)) getMac(c.ip, c.mac);
+    IPAddress ip(c.ip);
+    j += (i ? "," : ""); j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"banned\":" + (c.banned?"true":"false") + "}";
+  }
   j += "],\"custom\":[";
   for (int i = 0; i < numCustom; i++) { j += (i ? "," : ""); j += "\"" + jesc(customDom[i]) + "\""; }
   j += "],\"white\":[";
@@ -950,6 +1031,11 @@ void setup() {
     web.send(302, "text/plain", "");
   });
   web.on("/", []() {
+    if (!isDashboardHost()) {
+      if (handleBlockedRedirect()) return;
+      web.send(404, "text/plain", "Blocked by ProDuckX-DNS");
+      return;
+    }
     if (!sessionValid()) { web.sendHeader("Location", "/login"); web.send(302, "text/plain", ""); return; }
     web.send_P(200, "text/html", PAGE);
   });
@@ -1027,16 +1113,8 @@ void setup() {
     web.send(200, "text/plain", "ok");
   });
   web.onNotFound([]() {
-    if (blockUrl.length() > 0 && blockUrl != "0.0.0.0") {
-      String dest = blockUrl;
-      String h = web.header("Host");
-      if (h.length()) {
-        int colon = h.indexOf(':'); if (colon > 0) h = h.substring(0, colon);
-        dest += (dest.indexOf('?') >= 0 ? "&domain=" : "?domain=") + h;
-      }
-      web.sendHeader("Location", dest);
-      web.send(302, "text/plain", "Redirecting to " + dest);
-      return;
+    if (!isDashboardHost()) {
+      if (handleBlockedRedirect()) return;
     }
     web.send(404, "text/plain", "Not found");
   });

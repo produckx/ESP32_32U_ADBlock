@@ -1,7 +1,7 @@
 # PlatformIO build output
 .pio/
 .vscode/
-.screenshot/
+.screenshots/
 venv/
 # macOS metadata
 .DS_Store
