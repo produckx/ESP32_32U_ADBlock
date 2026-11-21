@@ -664,8 +664,10 @@ static void handleStats() {
   j += "],\"white\":[";
   for (int i = 0; i < numWhite; i++) { j += (i ? "," : ""); j += "\"" + jesc(whiteDom[i]) + "\""; }
   j += "],\"staticip\":" + String(staticIP ? "true" : "false") +
-       ",\"netip\":\"" + cfgIP.toString() + "\",\"netgw\":\"" + cfgGW.toString() +
-       "\",\"netsubnet\":\"" + cfgSN.toString() + "\",\"netdns\":\"" + cfgDNS.toString() + "\"" +
+       ",\"netip\":\"" + String(staticIP ? cfgIP.toString() : "") +
+       "\",\"netgw\":\"" + String(staticIP ? cfgGW.toString() : "") +
+       "\",\"netsubnet\":\"" + String(staticIP ? cfgSN.toString() : "") +
+       "\",\"netdns\":\"" + String(staticIP ? cfgDNS.toString() : "") + "\"" +
        ",\"blockurl\":\"" + jesc(blockUrl) + "\"";
   j += ",\"hist\":[";
   for (int k = 0; k < histCount; k++) {
@@ -921,11 +923,16 @@ static void handlePortalRoot() {
     // A real <select> is usable on every phone; the datalist this used to be
     // renders an affordance in several in-app browsers but no list, so picking
     // a network looked impossible. Typing the name still covers hidden APs.
-    "<select name=s style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>" + portalOpts + "</select>"
+    "<select name=s id=apsel style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>" + portalOpts + "</select>"
+    "<button type=button onclick=rescan(this) style='width:100%;padding:9px;margin-bottom:6px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;cursor:pointer'>Scan again</button>"
     "<input name=s2 placeholder='or type the WiFi name' style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
     "<input name=p type=password placeholder='Password' style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
     "<button style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;color:#000;font-weight:600;cursor:pointer'>Connect</button>"
-    "</form></body>";
+    "</form>"
+    "<script>async function rescan(b){b.disabled=true;b.textContent='Scanning...';"
+    "try{let r=await fetch('/scan');document.getElementById('apsel').innerHTML=await r.text();}"
+    "finally{b.disabled=false;b.textContent='Scan again';}}</script>"
+    "</body>";
   web.send(200, "text/html", html);
 }
 static void handleWifiSave() {
@@ -934,43 +941,63 @@ static void handleWifiSave() {
   String pw = web.arg("p");
   if (!ss.length()) { web.send(400, "text/plain", "missing WiFi name"); return; }
   prefs.begin("wifi", false); prefs.putString("ssid", ss); prefs.putString("pass", pw); prefs.end();
+  // Đổi WiFi = mạng mới -> bỏ IP tĩnh cũ, quay về DHCP
+  staticIP = false; LittleFS.remove("/net.cfg");
   web.send(200, "text/html", "<!doctype html><meta charset=utf-8><body style='font:16px system-ui;text-align:center;margin-top:60px'>"
                              "&#9989; Saved. Restarting and joining <b>" + htmlEscape(ss) + "</b>&hellip;<br><br>"
                              "Reconnect your phone to your normal WiFi, then find the box at <b>produckx.local</b>.</body>");
   delay(900); ESP.restart();
 }
-// Never returns — blocks in the portal loop until creds are saved (then reboots).
-static void startConfigPortal() {
-  // Bring the radio up before the first scan. An unconfigured device gets here
-  // straight from connectWiFi() without any WiFi call, and the first scan right
-  // after boot can come back empty - which left the network list with no
-  // entries at all. Start the station, then retry a few times.
-  WiFi.mode(WIFI_STA);
-  delay(200);
+// Build the <option> list of nearby networks (deduped, strongest first).
+// Retries because the very first scan right after boot / a mode change can
+// legitimately come back empty.
+static void portalScanNetworks() {
   int n = 0;
-  for (int attempt = 1; attempt <= 3 && n <= 0; attempt++) {
-    if (attempt > 1) delay(700);
-    n = WiFi.scanNetworks();
-    Serial.printf("[setup] scan %d/3: %d networks\n", attempt, n);
+  for (int attempt = 1; attempt <= 4 && n <= 0; attempt++) {
+    if (attempt > 1) delay(800);
+    n = WiFi.scanNetworks(false, true);       // blocking, include hidden SSIDs
+    Serial.printf("[setup] scan %d/4: %d networks\n", attempt, n);
   }
   portalOpts = "<option value=''>-- pick your network --</option>";
-  for (int i = 0; i < n && i < 15; i++) {
-    const String s = WiFi.SSID(i);
-    portalOpts += "<option value='" + htmlEscape(s) + "'>" + htmlEscape(s) + "</option>";
+  if (n > 0) {
+    const int MAX_AP = 32;
+    String ssids[MAX_AP]; int32_t rssi[MAX_AP]; int cnt = 0;
+    for (int i = 0; i < n && i < 64; i++) {
+      String s = WiFi.SSID(i);
+      if (!s.length()) continue;
+      int32_t r = WiFi.RSSI(i);
+      bool dup = false;
+      for (int j = 0; j < cnt; j++) if (ssids[j] == s) { if (r > rssi[j]) rssi[j] = r; dup = true; break; }
+      if (!dup && cnt < MAX_AP) { ssids[cnt] = s; rssi[cnt] = r; cnt++; }
+    }
+    for (int i = 0; i + 1 < cnt; i++)          // strongest signal first
+      for (int j = i + 1; j < cnt; j++)
+        if (rssi[j] > rssi[i]) { int32_t tr = rssi[i]; rssi[i] = rssi[j]; rssi[j] = tr; String ts = ssids[i]; ssids[i] = ssids[j]; ssids[j] = ts; }
+    for (int i = 0; i < cnt && i < 20; i++)
+      portalOpts += "<option value='" + htmlEscape(ssids[i]) + "'>" + htmlEscape(ssids[i]) + " (" + String(rssi[i]) + " dBm)</option>";
   }
-  uint8_t mac[6]; WiFi.macAddress(mac);
-  char ap[24]; snprintf(ap, sizeof(ap), "ProDuckX-DNS", mac[4], mac[5]);
-  // char ap[24]; snprintf(ap, sizeof(ap), "ProDuckX-DNS-%02X%02X", mac[4], mac[5]);
-  WiFi.mode(WIFI_AP); WiFi.softAP(ap);
+  WiFi.scanDelete();
+}
+
+// Never returns — blocks in the portal loop until creds are saved (then reboots).
+static void startConfigPortal() {
+  // AP_STA (not AP-only): the soft-AP lets the phone open the setup page while
+  // the station interface stays free to scan. In AP-only mode scanNetworks()
+  // returns nothing, which left the "pick your network" list empty.
+  WiFi.mode(WIFI_AP_STA);
+  delay(200);
+  WiFi.softAP("ProDuckX-DNS");
   WiFi.setTxPower(WIFI_POWER_8_5dBm);          // the phone is right next to it
   IPAddress apIP = WiFi.softAPIP();
+  portalScanNetworks();                        // AP is up now; scan runs alongside it
   dnsPortal.start(53, "*", apIP);              // catch-all -> phones pop the captive portal
   web.on("/", handlePortalRoot);
+  web.on("/scan", []() { portalScanNetworks(); web.send(200, "text/html", portalOpts); });  // rescan on demand
   web.on("/wifisave", HTTP_POST, handleWifiSave);
   web.onNotFound(handlePortalRoot);            // any captive-portal probe -> the form
   web.begin();
-  Serial.printf("\n[setup] No WiFi. Join open network \"%s\" and a setup page pops up (or http://%s)\n",
-                ap, apIP.toString().c_str());
+  Serial.printf("\n[setup] No WiFi. Join open network \"ProDuckX-DNS\" and a setup page pops up (or http://%s)\n",
+                apIP.toString().c_str());
   // A configured device that merely failed to join (router rebooting, weak signal) must not
   // get stuck here: if nobody is using the portal, reboot and retry WiFi every 3 minutes.
   const bool configured = hasCreds();
@@ -1059,6 +1086,9 @@ void setup() {
     prefs.clear();
     prefs.putBool("portal", true);
     prefs.end();
+    // Quên WiFi cũ -> xóa luôn IP tĩnh để mạng mới dùng DHCP
+    staticIP = false;
+    LittleFS.remove("/net.cfg");
     delay(500);
     ESP.restart();
   });

@@ -17,13 +17,24 @@ th{background:#21262d;color:#8b949e}tr:hover td{background:#1c2128}
 button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:5px;padding:4px 9px;cursor:pointer}
 button:hover{background:#30363d}.ban{color:#f85149}input{background:#0d1117;border:1px solid #30363d;color:#c9d1d9;border-radius:5px;padding:6px}
 h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
+/* bảng client: không cho MAC/IP xuống dòng, cuộn ngang khi màn hình hẹp */
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:8px;margin-bottom:18px}
+.tw table{margin-bottom:0}
+#ct th,#ct td{white-space:nowrap}
+#ct td:first-child{white-space:normal;word-break:break-all;min-width:130px}
+#ct td:nth-child(2){font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#8b949e}
+/* lịch sử: tối đa 10 dòng hiển thị, cuộn dọc khi nhiều hơn */
+.hist{max-height:352px;overflow-y:auto;border-radius:8px;margin-bottom:18px}
+.hist table{margin-bottom:0}
+.hist thead th{position:sticky;top:0;z-index:1}
+#ht td:first-child{word-break:break-all}
 </style></head><body>
 <header><h1>🛡️ ProDuckX-DNS <span id=host></span></h1></header><div class=wrap>
 <div id=credwarn style="display:none;background:#3b1d1d;border:1px solid #f85149;color:#ffb3ae;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px">
 ⚠️ <b>Default credentials in use.</b> WEB_PASS/OTA_PASS in <code>secrets.h</code> are still the placeholder values — anyone can read them in the public repo. Set real values and reflash.
 </div>
 <div class=cards id=sys></div>
-<h2>CLIENTS</h2><table id=ct><thead><tr><th>Client</th><th>MAC</th><th>Blocked</th><th>Allowed</th><th></th></tr></thead><tbody></tbody></table>
+<h2>CLIENTS</h2><div class=tw><table id=ct><thead><tr><th>Client</th><th>MAC</th><th>Blocked</th><th>Allowed</th><th></th></tr></thead><tbody></tbody></table></div>
 <h2>CUSTOM BLOCKED DOMAINS</h2>
 <div style=margin-bottom:8px><input id=dom placeholder="ads.example.com" size=30><button onclick=addDom()>Block domain</button></div>
 <table id=cl><tbody></tbody></table>
@@ -55,7 +66,7 @@ h2{font-size:14px;color:#8b949e;margin:18px 0 8px}
 <h2>WIFI</h2>
 <div style=margin-bottom:18px><button onclick="if(confirm('Forget saved WiFi and reboot into the setup portal?'))forgetWifi()">Forget WiFi</button></div>
 <h2>RECENTLY BLOCKED</h2>
-<table id=ht><thead><tr><th>Domain</th><th>Client</th><th>When</th></tr></thead><tbody></tbody></table>
+<div class=hist><table id=ht><thead><tr><th>Domain</th><th>Client</th><th>When</th></tr></thead><tbody></tbody></table></div>
 </div><script>
 function fmt(n){return n.toLocaleString()}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -78,10 +89,7 @@ cl.tBodies[0].innerHTML=s.custom.map(d=>`<tr><td>${esc(d)}</td><td style=text-al
 wl.tBodies[0].innerHTML=s.white.map(d=>`<tr><td>${esc(d)}</td><td style=text-align:right><button class=wrm data-d="${esc(d)}">remove</button></td></tr>`).join('')||'<tr><td style=color:#8b949e>none yet</td></tr>';
 ht.tBodies[0].innerHTML=s.hist.map(h=>`<tr><td>${esc(h.d)}</td><td>${h.ip}</td><td>${h.t<60?h.t+'s ago':Math.round(h.t/60)+'m ago'}</td></tr>`).join('')||'<tr><td colspan=3 style=color:#8b949e>nothing blocked yet</td></tr>';
 netstate.textContent=s.staticip?'static':'DHCP';
-if(document.activeElement!=netip)netip.value=s.netip||'';
-if(document.activeElement!=netgw)netgw.value=s.netgw||'';
-if(document.activeElement!=netsn)netsn.value=s.netsubnet||'';
-if(document.activeElement!=netdns)netdns.value=s.netdns||'';
+if(!netEdited){netip.value=s.netip||'';netgw.value=s.netgw||'';netsn.value=s.netsubnet||'';netdns.value=s.netdns||'';}
 if(document.activeElement!=burl)burl.value=s.blockurl||'';
 if(document.activeElement!=uurl)uurl.value=s.upurl||'';
 if(document.activeElement!=uiv)uiv.value=s.upiv||24;
@@ -91,9 +99,12 @@ ct.addEventListener('click',e=>{if(e.target.classList.contains('ban'))fetch('/ba
 cl.addEventListener('click',e=>{if(e.target.classList.contains('rmbtn'))fetch('/unblock?d='+encodeURIComponent(e.target.dataset.d),{headers:CSRF_HDRS}).then(load)});
 function addWhite(){let d=wdom.value.trim();if(d){fetch('/addwhite?d='+encodeURIComponent(d),{headers:CSRF_HDRS}).then(()=>{wdom.value='';load()})}}
 wl.addEventListener('click',e=>{if(e.target.classList.contains('wrm'))fetch('/unwhite?d='+encodeURIComponent(e.target.dataset.d),{headers:CSRF_HDRS}).then(load)});
+let netEdited=false;
+[netip,netgw,netsn,netdns].forEach(el=>el.addEventListener('input',()=>{netEdited=true;}));
 function saveIP(){let ip=netip.value.trim(),gw=netgw.value.trim(),sn=netsn.value.trim(),dns=netdns.value.trim();
 if(!ip||!gw||!sn||!dns){netmsg.textContent='fill all four fields';return;}
 netmsg.textContent='saving...';
+netEdited=false;
 fetch('/setip?ip='+encodeURIComponent(ip)+'&gw='+encodeURIComponent(gw)+'&subnet='+encodeURIComponent(sn)+'&dns='+encodeURIComponent(dns),{headers:CSRF_HDRS})
 .then(async r=>{netmsg.textContent=r.ok?'✓ saved, rebooting to apply':'✗ '+await r.text()}).catch(()=>netmsg.textContent='✓ rebooting...');}
 function setDhcp(){if(!confirm('Switch back to DHCP and reboot?'))return;netmsg.textContent='saving...';
