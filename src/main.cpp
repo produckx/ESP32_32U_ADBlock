@@ -72,7 +72,8 @@ static uint8_t rangeBuf[MAX_RANGE * HASH_BYTES];
 #ifndef MAX_WHITE
 #define MAX_WHITE 200
 #endif
-struct Dev { uint32_t ip; uint8_t mac[6]; uint32_t blocked, allowed, lastSeen; bool banned; String label; };
+struct Dev { uint32_t ip; uint8_t mac[6]; uint32_t blocked, allowed, lastSeen; bool banned; String label;
+             uint32_t dayB, dayA, dayId; };   // đếm request trong ngày hiện tại (millis/86400000)
 Dev clients[MAX_CLIENTS]; int numClients = 0;
 
 String customDom[MAX_CUSTOM]; uint64_t customHash[MAX_CUSTOM]; int numCustom = 0;
@@ -349,6 +350,7 @@ static Dev* getClient(uint32_t ip) {
   if (numClients < MAX_CLIENTS) {
     Dev* c = &clients[numClients++];
     c->ip = ip; c->blocked = c->allowed = 0; c->lastSeen = millis(); c->banned = isBannedIP(ip); c->label = "";
+    c->dayB = c->dayA = 0; c->dayId = millis() / 86400000UL;
     memset(c->mac, 0, 6);
     getMac(ip, c->mac);
     return c;
@@ -489,6 +491,12 @@ static int forwardUpstream(int qlen, int qend) {
   }
   return 0;
 }
+// Reset bộ đếm theo ngày khi sang ngày mới (dựa trên uptime millis)
+static void bumpDay(Dev* c) {
+  uint32_t d = millis() / 86400000UL;
+  if (c->dayId != d) { c->dayId = d; c->dayB = 0; c->dayA = 0; }
+}
+
 // Drain a whole RX burst per call (capped, so web/OTA still get a turn) instead of
 // one packet per loop iteration. Returns true if any query was handled this call.
 static bool handleDns() {
@@ -507,11 +515,11 @@ static bool handleDns() {
     int rlen;
     if (isLocalDomain) { rlen = buildLocalAnswer(qend, qtype); }
     else if (blocked)  {
-      rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) c->blocked++; if (dl) logBlocked(domain, (uint32_t)cip);
+      rlen = buildBlocked(qend, qtype); totalBlocked++; if (c) { bumpDay(c); c->blocked++; c->dayB++; } if (dl) logBlocked(domain, (uint32_t)cip);
       Serial.printf("[dns] BLOCKED %s (qtype=%u) -> %s\n", domain, qtype,
                     (blockUrl.length() && blockUrl != "0.0.0.0") ? "redirect-to-ESP32" : "0.0.0.0");
     }
-    else               { rlen = forwardUpstream(qlen, qend);     totalAllowed++; if (c) c->allowed++; }
+    else               { rlen = forwardUpstream(qlen, qend);     totalAllowed++; if (c) { bumpDay(c); c->allowed++; c->dayA++; } }
     if (rlen > 0) { dnsServer.beginPacket(cip, cport); dnsServer.write(buf, rlen); dnsServer.endPacket(); }
   }
   return did;
@@ -579,17 +587,31 @@ static String newSessionToken() {
 }
 static void sendLoginPage(const String& err) {
   String html =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>ProDuckX-DNS &mdash; login</title>"
-    "<body style='font:16px system-ui,sans-serif;max-width:360px;margin:70px auto;padding:0 16px;background:#0d1117;color:#c9d1d9'>"
-    "<h2>&#128737; ProDuckX-DNS</h2>"
-    "<form method=POST action=/login>"
-    "<input name=u placeholder='Username' autocomplete=username autofocus style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<input name=p type=password placeholder='Password' autocomplete=current-password style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<button style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;color:#000;font-weight:600;cursor:pointer'>Sign in</button>"
+    "<script src='https://cdn.tailwindcss.com'></script>"
+    "<link rel=stylesheet href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css'>"
+    "</head><body class='flex min-h-screen items-center justify-center bg-slate-950 p-4 text-slate-200 antialiased'>"
+    "<div class='w-full max-w-sm'>"
+    "<div class='mb-6 text-center'>"
+    "<div class='mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/10'>"
+    "<i class='fa-solid fa-shield-halved text-2xl text-emerald-400'></i></div>"
+    "<h1 class='mt-3 text-xl font-semibold tracking-tight'>ProDuckX-DNS</h1>"
+    "<p class='mt-1 text-xs text-slate-500'>DNS sinkhole &mdash; admin console</p></div>"
+    "<form method=POST action=/login class='space-y-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl'>"
+    "<div><label class='mb-1 block text-xs text-slate-400'>Username</label>"
+    "<input name=u autocomplete=username autofocus placeholder='admin' "
+    "class='w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm placeholder-slate-500 focus:border-emerald-500 focus:outline-none'></div>"
+    "<div><label class='mb-1 block text-xs text-slate-400'>Password</label>"
+    "<input name=p type=password autocomplete=current-password placeholder='••••••••' "
+    "class='w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm placeholder-slate-500 focus:border-emerald-500 focus:outline-none'></div>"
+    "<button class='w-full rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400'>"
+    "<i class='fa-solid fa-right-to-bracket mr-1'></i>Sign in</button>"
     "</form>";
-  if (err.length()) html += "<p style='color:#f85149'>" + htmlEscape(err) + "</p>";
-  html += "</body>";
+  if (err.length())
+    html += "<div class='mt-4 flex items-start gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300'>"
+            "<i class='fa-solid fa-triangle-exclamation mt-0.5'></i><span>" + htmlEscape(err) + "</span></div>";
+  html += "</div></body></html>";
   web.send(200, "text/html", html);
 }
 static void handleLoginPost() {
@@ -661,8 +683,10 @@ static void handleStats() {
   for (int i = 0; i < numClients; i++) {
     Dev& c = clients[i];
     if (isZeroMac(c.mac)) getMac(c.ip, c.mac);
+    bumpDay(&c);                                   // sang ngày mới -> reset bộ đếm ngày
     IPAddress ip(c.ip);
-    j += (i ? "," : ""); j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"banned\":" + (c.banned?"true":"false") + "}";
+    j += (i ? "," : ""); j += "{\"ip\":\"" + ip.toString() + "\",\"mac\":\"" + macStr(c.mac) + "\",\"blocked\":" + c.blocked + ",\"allowed\":" + c.allowed + ",\"banned\":" + (c.banned?"true":"false") +
+         ",\"tblocked\":" + c.dayB + ",\"tallowed\":" + c.dayA + ",\"today\":" + (c.dayB + c.dayA) + "}";
   }
   j += "],\"custom\":[";
   for (int i = 0; i < numCustom; i++) { j += (i ? "," : ""); j += "\"" + jesc(customDom[i]) + "\""; }
@@ -918,26 +942,40 @@ static bool connectWiFi() {
 }
 
 static void handlePortalRoot() {
+  // LƯU Ý: trang này chạy khi điện thoại đang nối AP của ESP32 (DNS catch-all) nên CDN
+  // thường KHÔNG tải được; phần <style> tối giản bên dưới chỉ để form vẫn dùng được.
   String html =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>C3 AdBlock setup</title>"
-    "<body style='font:16px system-ui,sans-serif;max-width:420px;margin:36px auto;padding:0 16px;background:#0d1117;color:#c9d1d9'>"
-    "<h2>&#128737; C3 AdBlock &mdash; WiFi setup</h2>"
-    "<p style='color:#8b949e'>Pick your network and enter its password. The device restarts and joins it.</p>"
-    "<form method=POST action=/wifisave>"
+    "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>ProDuckX-DNS &mdash; WiFi setup</title>"
+    "<script src='https://cdn.tailwindcss.com'></script>"
+    "<link rel=stylesheet href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css'>"
+    "<style>body{font:16px system-ui,sans-serif;margin:0;background:#020617;color:#e2e8f0}"
+    "input,select,button{width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:8px;"
+    "border:1px solid #334155;background:#0f172a;color:#e2e8f0;font:inherit}"
+    "button{cursor:pointer}form{max-width:420px;margin:36px auto;padding:0 16px}</style>"
+    "</head><body class='min-h-screen bg-slate-950 text-slate-200 antialiased'>"
+    "<form method=POST action=/wifisave class='mx-auto mt-10 max-w-md space-y-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-xl'>"
+    "<div class='text-center'>"
+    "<div class='mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/10'>"
+    "<i class='fa-solid fa-wifi text-xl text-emerald-400'></i></div>"
+    "<h1 class='mt-3 text-lg font-semibold tracking-tight'>ProDuckX-DNS</h1>"
+    "<p class='mt-1 text-xs text-slate-400'>WiFi setup &mdash; chọn mạng và nhập mật khẩu, thiết bị sẽ khởi động lại và kết nối.</p></div>"
     // A real <select> is usable on every phone; the datalist this used to be
     // renders an affordance in several in-app browsers but no list, so picking
     // a network looked impossible. Typing the name still covers hidden APs.
-    "<select name=s id=apsel style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>" + portalOpts + "</select>"
-    "<button type=button onclick=rescan(this) style='width:100%;padding:9px;margin-bottom:6px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;cursor:pointer'>Scan again</button>"
-    "<input name=s2 placeholder='or type the WiFi name' style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<input name=p type=password placeholder='Password' style='width:100%;box-sizing:border-box;padding:11px;margin:6px 0;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#c9d1d9'>"
-    "<button style='width:100%;padding:12px;margin-top:8px;border-radius:6px;border:0;background:#3fb950;color:#000;font-weight:600;cursor:pointer'>Connect</button>"
+    "<div><label class='mb-1 block text-xs text-slate-400'>Network</label>"
+    "<select name=s id=apsel class='rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm focus:border-emerald-500 focus:outline-none'>" + portalOpts + "</select></div>"
+    "<button type=button onclick=rescan(this) class='rounded-lg border border-slate-700 bg-slate-800 py-2.5 text-sm hover:bg-slate-700'>"
+    "<i class='fa-solid fa-rotate mr-1'></i>Scan again</button>"
+    "<input name=s2 placeholder='or type the WiFi name' class='rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm placeholder-slate-500 focus:border-emerald-500 focus:outline-none'>"
+    "<input name=p type=password placeholder='Password' class='rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm placeholder-slate-500 focus:border-emerald-500 focus:outline-none'>"
+    "<button class='w-full rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400'>"
+    "<i class='fa-solid fa-plug mr-1'></i>Connect</button>"
     "</form>"
-    "<script>async function rescan(b){b.disabled=true;b.textContent='Scanning...';"
+    "<script>async function rescan(b){b.disabled=true;b.innerHTML='Scanning...';"
     "try{let r=await fetch('/scan');document.getElementById('apsel').innerHTML=await r.text();}"
-    "finally{b.disabled=false;b.textContent='Scan again';}}</script>"
-    "</body>";
+    "finally{b.disabled=false;b.innerHTML='<i class=\"fa-solid fa-rotate\"></i> Scan again';}}</script>"
+    "</body></html>";
   web.send(200, "text/html", html);
 }
 static void handleWifiSave() {

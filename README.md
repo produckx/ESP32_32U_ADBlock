@@ -89,12 +89,12 @@ Dự án sử dụng PlatformIO trong môi trường ảo `.\venv`. Mở PowerSh
 ### Bước 1: Nạp Firmware (Chương trình chính)
 Nạp mã nguồn firmware và cấu trúc phân vùng mới vào ESP32:
 ```powershell
-.\venv\Scripts\pio.exe run -t upload
+.\venv\Scripts\pio.exe run -e esp32dev -t upload
 ```
 
 *(Tùy chọn: Mở màn hình Serial Monitor xem log khởi động)*:
 ```powershell
-.\venv\Scripts\pio.exe run -t upload -t monitor
+.\venv\Scripts\pio.exe run -e esp32dev -t upload -t monitor
 ```
 
 ### Bước 2: Chuẩn Bị & Nạp Danh Sách Chặn (LittleFS)
@@ -108,7 +108,7 @@ File danh sách chặn `data/blocklist.bin` cần được nạp vào bộ nhớ
 
 2. **Nạp file hệ thống vào ESP32**:
    ```powershell
-   .\venv\Scripts\pio.exe run -t uploadfs
+   .\venv\Scripts\pio.exe run -e esp32dev -t uploadfs
    ```
 
 > **Lưu ý**: Chỉ cần chạy lệnh `uploadfs` khi lần đầu nạp board mới hoặc khi bạn muốn thay đổi danh sách `blocklist.bin` qua cổng nạp dây USB.
