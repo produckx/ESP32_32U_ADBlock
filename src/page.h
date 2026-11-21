@@ -74,7 +74,7 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 // can — so requiring this on every mutating request blocks drive-by CSRF even
 // though the server can't otherwise tell a forged request from a real one over
 // plain HTTP Basic Auth (browsers auto-replay cached Basic Auth cross-origin).
-const CSRF_HDRS={'X-Requested-With':'c3-adblock'}
+const CSRF_HDRS={'X-Requested-With':'produckx-adblock'}
 async function load(){let r=await fetch('/stats.json');if(r.status==401){location.href='/login';return;}let s=await r.json();
 host.textContent='@ '+s.ip;
 credwarn.style.display=s.defcreds?'block':'none';

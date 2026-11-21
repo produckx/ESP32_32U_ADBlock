@@ -358,10 +358,8 @@ static Dev* getClient(uint32_t ip) {
 
 // ---------- upstream resolver ----------
 // Allowed lookups are forwarded to one of:
-//   built-in (default) - the compile-time UPSTREAM_IP (Quad9). Independent of the LAN, which
-//                        matters because this box is often the BACKUP for a Pi-hole/AdGuard
-//                        that the router hands out over DHCP; forwarding there would fail
-//                        exactly when the backup is needed.
+//   built-in (default) - DNS mà ESP32 nhận được: DNS tĩnh (nếu bật IP tĩnh) hoặc DNS cấp qua
+//                        DHCP; nếu rỗng/trùng chính ESP32 thì dùng gateway, cuối cùng là Quad9.
 //   router             - the DNS the router hands out over DHCP (else the gateway), opt-in.
 //   custom             - an address set on the dashboard.
 // Persisted in /upstream.cfg ("router" or an IPv4 address; absent = built-in).
@@ -379,7 +377,14 @@ static void upstreamApply() {
     if ((uint32_t)dhcp != 0 && dhcp != self) { upstreamDns = dhcp; upstreamSource = "router (dhcp)"; return; }
     if ((uint32_t)gw != 0 && gw != self)     { upstreamDns = gw;   upstreamSource = "router (gateway)"; return; }
   }
-  upstreamDns = UPSTREAM; upstreamSource = "built-in";
+  // built-in: ưu tiên DNS của chính ESP32 (static DNS nếu có, ngược lại DNS từ DHCP)
+  const IPAddress sysDns = staticIP ? cfgDNS : WiFi.dnsIP();
+  const IPAddress gw     = staticIP ? cfgGW  : WiFi.gatewayIP();
+  if (usableResolver(sysDns) && sysDns != self) {
+    upstreamDns = sysDns; upstreamSource = staticIP ? "static (dns)" : "dhcp (dns)"; return;
+  }
+  if (usableResolver(gw) && gw != self) { upstreamDns = gw; upstreamSource = "gateway"; return; }
+  upstreamDns = UPSTREAM; upstreamSource = "fallback 9.9.9.9";
 }
 static void upstreamLoad() {
   upstreamMode = UP_BUILTIN;
@@ -688,7 +693,7 @@ static void handleStats() {
 // page can't drive these endpoints even if the victim's browser carries the
 // session cookie. (HTTP Basic Auth was the old scheme; the cookie replaced it.)
 static const char* CSRF_HEADER = "X-Requested-With";
-static const char* CSRF_VALUE  = "c3-adblock";
+static const char* CSRF_VALUE  = "produckx-adblock";
 static bool requireAuth() {
   if (web.header(CSRF_HEADER) != CSRF_VALUE) { web.send(403, "text/plain", "missing CSRF header"); return false; }
   if (sessionValid()) return true;
@@ -1017,7 +1022,7 @@ void setup() {
   delay(100);
   maxIdlePerSec = (idleCounter[0] + idleCounter[1]) * 10;
   lastCpuSampleMs = millis();
-  Serial.println("\n[c3-adblock] booting");
+  Serial.println("\n[produckx-adblock] booting");
   if (!LittleFS.begin(true)) Serial.println("LittleFS FAILED");
   blocklist = LittleFS.open(BLOCKLIST_PATH, "r");
   if (blocklist) {
@@ -1038,6 +1043,10 @@ void setup() {
 
   if (!connectWiFi()) startConfigPortal();   // portal blocks + reboots on save; returns only when connected
   Serial.printf("WiFi up: %s\n", WiFi.localIP().toString().c_str());
+  const IPAddress shownSN = staticIP ? cfgSN : WiFi.subnetMask();
+  const IPAddress shownGW = staticIP ? cfgGW : WiFi.gatewayIP();
+  Serial.printf("Subnet: %s\n", shownSN.toString().c_str());
+  Serial.printf("Gateway: %s\n", shownGW.toString().c_str());
   upstreamApply();                              // DHCP is up now (matters for "router" mode)
   Serial.printf("upstream DNS: %s (%s)\n", upstreamDns.toString().c_str(), upstreamSource);
   if (MDNS.begin("produckx")) { MDNS.addService("http", "tcp", 80); Serial.println("dashboard: http://produckx.local"); }
