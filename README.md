@@ -31,8 +31,32 @@
 
 - **Phần cứng**: ESP32 Dev Module (Flash 4MB).
 - **Phần mềm**:
-  - Python 3.8+ (đã cài đặt môi trường ảo `venv`).
+  - Python 3.8+.
   - PlatformIO Core (CLI) hoặc extension PlatformIO trên VS Code.
+
+### Kích hoạt môi trường ảo `venv` và cài PlatformIO
+
+Nếu chưa có môi trường ảo, tạo mới tại thư mục gốc dự án:
+
+```powershell
+# Tạo venv (chỉ làm 1 lần)
+python -m venv venv
+
+# Kích hoạt venv (PowerShell)
+.\venv\Scripts\Activate.ps1
+
+# Nếu PowerShell chặn script, cho phép trong phiên hiện tại rồi kích hoạt lại
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+
+# Cài PlatformIO Core vào venv
+pip install -U platformio
+
+# Kiểm tra
+pio --version
+```
+
+> Sau khi kích hoạt, có thể dùng `pio ...` trực tiếp. Nếu không kích hoạt, dùng đường dẫn đầy đủ `.\venv\Scripts\pio.exe ...` như trong các lệnh bên dưới.
 
 ---
 
