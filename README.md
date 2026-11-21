@@ -183,3 +183,17 @@ Nếu ESP32 chưa có cấu hình WiFi:
 
 **Q: Lỗi `File system is full` khi chạy `uploadfs`?**
 > **A**: Dự án đã tối ưu bảng phân vùng `partitions.csv` (2.68 MB cho LittleFS). Đảm bảo bạn đã nạp firmware mới (`pio run -t upload`) trước khi chạy `uploadfs`.
+<!-- ## 👩‍👩‍👧‍👦 Contributors
+
+<div align="center">
+<a href="https://github.com/produckx/ESP32_32U_ADBlock/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=produckx/ESP32_32U_ADBlock&max=400&columns=20"  width="800"/>
+</a>
+</div> -->
+<!-- ## 🌟 Star
+
+<div align="center">
+  <p>
+      <img width="800" src="https://api.star-history.com/svg?repos=produckx/ESP32_32U_ADBlock&type=Date" alt="Star-history">
+  </p>
+</div> -->
